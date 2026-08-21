@@ -22,7 +22,11 @@ jobs:
           java-version: "17"
       - name: Install exact Android toolchain
         shell: pwsh
-        run: sdkmanager "platforms;android-36" "build-tools;36.1.0"
+        run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          if (-not (Test-Path -LiteralPath $sdkmanager)) { throw "sdkmanager missing: $sdkmanager" }
+          & $sdkmanager "platforms;android-36" "build-tools;36.1.0"
+          if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed: $LASTEXITCODE" }
       - name: Test PowerShell 5.1 and 7
         shell: pwsh
         run: |
