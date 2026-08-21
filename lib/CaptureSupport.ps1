@@ -1,4 +1,4 @@
-function ConvertTo-AndroidUriEncoded([string]$Value) {
+﻿function ConvertTo-AndroidUriEncoded([string]$Value) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
     $builder = [Text.StringBuilder]::new($bytes.Length * 3)
     foreach ($byte in $bytes) {
