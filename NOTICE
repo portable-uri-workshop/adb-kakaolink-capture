@@ -1,0 +1,8 @@
+This project includes a compile-only declaration of Android's hidden
+IActivityController interface. The declaration follows the interface shape in
+the Android Open Source Project, which is licensed under the Apache License 2.0:
+
+https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/app/IActivityController.aidl
+
+The compile-only declaration is excluded from the generated DEX JAR. At
+runtime, Android supplies the platform implementation from the boot class path.

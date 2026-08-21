@@ -1,0 +1,82 @@
+name: Build, attest, and release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  attestations: write
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android toolchain
+        shell: pwsh
+        run: sdkmanager "platforms;android-36" "build-tools;36.1.0"
+
+      - name: Test and build in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\test.ps1
+          .\build.ps1
+
+      - name: Verify and package release JAR
+        shell: pwsh
+        run: |
+          $entries = @(jar tf .\out\adb-intent-capture.jar)
+          if ($entries -notcontains 'classes.dex') { throw 'classes.dex missing from JAR' }
+          $dexdump = Join-Path $env:ANDROID_HOME 'build-tools\36.1.0\dexdump.exe'
+          $descriptors = & $dexdump -f .\temp\build\dex\classes.dex |
+            Select-String 'Class descriptor' |
+            ForEach-Object { $_.Line.Trim() }
+          if ($descriptors.Count -ne 2) { throw 'Unexpected DEX class count' }
+          if (-not ($descriptors -match 'IntentCaptureMonitor')) { throw 'Monitor class missing' }
+          if (-not ($descriptors -match 'LaunchDecision')) { throw 'Policy class missing' }
+          New-Item -ItemType Directory -Force .\dist | Out-Null
+          $releaseJar = ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar"
+          Copy-Item .\out\adb-intent-capture.jar $releaseJar
+          $hash = (Get-FileHash -Algorithm SHA256 $releaseJar).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($releaseJar))" |
+            Set-Content -Encoding ascii "$releaseJar.sha256"
+
+      - name: Generate GitHub build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/adb-kakaolink-capture-${{ github.ref_name }}.jar
+
+      - name: Publish bot-authored GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          Initial release.
+
+          - Captures explicit KakaoTalk kakaolink://send intents over ADB.
+          - Copies a portable redirect URL to the Windows clipboard.
+          - Adds opt-in -BlockLaunch mode to cancel the matched KakaoTalk Activity start.
+          - Requires no root, APK patching, app installation, or target-process hooking.
+          - Includes GitHub Artifact Attestation for build provenance verification.
+          '@ | Set-Content -Encoding utf8 .\release-notes.txt
+          gh release create $env:GITHUB_REF_NAME `
+            ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar" `
+            ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar.sha256" `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "ADB KakaoLink Intent Capture $env:GITHUB_REF_NAME" `
+            --notes-file .\release-notes.txt `
+            --verify-tag
