@@ -22,8 +22,8 @@ final class LaunchDecision {
                 || equalsIgnoreCase(KAKAOTALK_PACKAGE, componentPackage);
     }
 
-    static boolean shouldAllowMatchedStart(boolean blockLaunch) {
-        return !blockLaunch;
+    static boolean shouldAllowMatchedStart(boolean blockLaunch, boolean captureQueued) {
+        return !captureQueued || !blockLaunch;
     }
 
     private static boolean equalsIgnoreCase(String expected, String actual) {

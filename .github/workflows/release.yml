@@ -2,40 +2,41 @@ name: Build, attest, and release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ["v*.*.*"]
 
 permissions:
-  attestations: write
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  release:
+  build-test:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
-
-      - uses: android-actions/setup-android@v3
-
-      - name: Install pinned Android toolchain
+      - name: Install exact Android toolchain
         shell: pwsh
-        run: sdkmanager "platforms;android-36" "build-tools;36.1.0"
-
-      - name: Test and build in Windows PowerShell 5.1
-        shell: powershell
         run: |
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          if (-not (Test-Path -LiteralPath $sdkmanager)) { throw "sdkmanager missing: $sdkmanager" }
+          & $sdkmanager "platforms;android-36" "build-tools;36.1.0"
+          if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed: $LASTEXITCODE" }
+      - name: Test PowerShell 5.1 and 7
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File .\test.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 tests failed' }
           .\test.ps1
-          .\build.ps1
-
-      - name: Verify and package release JAR
+      - name: Build prebuilt DEX JAR
+        shell: powershell
+        run: .\build.ps1
+      - name: Verify DEX contents
         shell: pwsh
         run: |
           $entries = @(jar tf .\out\adb-intent-capture.jar)
@@ -44,39 +45,90 @@ jobs:
           $descriptors = & $dexdump -f .\temp\build\dex\classes.dex |
             Select-String 'Class descriptor' |
             ForEach-Object { $_.Line.Trim() }
-          if ($descriptors.Count -ne 2) { throw 'Unexpected DEX class count' }
           if (-not ($descriptors -match 'IntentCaptureMonitor')) { throw 'Monitor class missing' }
+          if (-not ($descriptors -match 'CaptureWriter')) { throw 'Async writer missing' }
           if (-not ($descriptors -match 'LaunchDecision')) { throw 'Policy class missing' }
-          New-Item -ItemType Directory -Force .\dist | Out-Null
+          if ($descriptors -match 'Landroid/app/IActivityController') { throw 'Compile-only stub leaked into DEX' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-output
+          path: out/adb-intent-capture.jar
+          if-no-files-found: error
+
+  package-attest:
+    needs: build-test
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: build-output
+          path: out
+      - name: Package JAR and Windows bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .\dist, .\temp\bundle\out | Out-Null
           $releaseJar = ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar"
           Copy-Item .\out\adb-intent-capture.jar $releaseJar
-          $hash = (Get-FileHash -Algorithm SHA256 $releaseJar).Hash.ToLowerInvariant()
-          "$hash  $([IO.Path]::GetFileName($releaseJar))" |
-            Set-Content -Encoding ascii "$releaseJar.sha256"
-
-      - name: Generate GitHub build provenance
-        uses: actions/attest@v4
+          $bundleFiles = @(
+            'capture.ps1', 'build.ps1', 'test.ps1', 'README.md', 'LICENSE',
+            'LICENSE-APACHE-2.0', 'NOTICE'
+          )
+          Copy-Item $bundleFiles .\temp\bundle
+          Copy-Item .\lib .\temp\bundle\lib -Recurse
+          Copy-Item .\src .\temp\bundle\src -Recurse
+          Copy-Item .\compile-stubs .\temp\bundle\compile-stubs -Recurse
+          Copy-Item .\tests .\temp\bundle\tests -Recurse
+          Copy-Item .\out\adb-intent-capture.jar .\temp\bundle\out
+          $bundle = ".\dist\adb-kakaolink-capture-windows-$env:GITHUB_REF_NAME.zip"
+          Compress-Archive -Path .\temp\bundle\* -DestinationPath $bundle -CompressionLevel Optimal
+          foreach ($artifact in @($releaseJar, $bundle)) {
+            $hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($artifact))" | Set-Content -Encoding ascii "$artifact.sha256"
+          }
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-path: dist/adb-kakaolink-capture-${{ github.ref_name }}.jar
+          subject-path: |
+            dist/adb-kakaolink-capture-${{ github.ref_name }}.jar
+            dist/adb-kakaolink-capture-windows-${{ github.ref_name }}.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-files
+          path: dist
+          if-no-files-found: error
 
-      - name: Publish bot-authored GitHub Release
-        shell: pwsh
+  release:
+    needs: package-attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-files
+          path: dist
+      - name: Publish immutable release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          @'
-          Initial release.
+          cat > release-notes.md <<'EOF'
+          Version 2 changes the default clipboard output to the original data URI.
 
-          - Captures explicit KakaoTalk kakaolink://send intents over ADB.
-          - Copies a portable redirect URL to the Windows clipboard.
-          - Adds opt-in -BlockLaunch mode to cancel the matched KakaoTalk Activity start.
-          - Requires no root, APK patching, app installation, or target-process hooking.
-          - Includes GitHub Artifact Attestation for build provenance verification.
-          '@ | Set-Content -Encoding utf8 .\release-notes.txt
-          gh release create $env:GITHUB_REF_NAME `
-            ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar" `
-            ".\dist\adb-kakaolink-capture-$env:GITHUB_REF_NAME.jar.sha256" `
-            --repo $env:GITHUB_REPOSITORY `
-            --title "ADB KakaoLink Intent Capture $env:GITHUB_REF_NAME" `
-            --notes-file .\release-notes.txt `
+          - Add explicit `-Link` mode for the GitHub Pages redirector.
+          - Support Windows PowerShell 5.1 and PowerShell 7 argument APIs.
+          - Move Base64/stdout work off the Binder callback to a bounded queue writer.
+          - Fail open on oversized records, queue pressure, and writer failure.
+          - Include a prebuilt DEX JAR and a Windows bundle ZIP with SHA-256 and attestations.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ADB KakaoLink Intent Capture $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
             --verify-tag

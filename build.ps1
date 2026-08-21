@@ -28,26 +28,23 @@ function Find-AndroidSdk {
     return (Resolve-Path -LiteralPath $candidates[0]).Path
 }
 
-function Get-VersionedDirectory([string]$parent, [string]$prefix) {
-    $directories = Get-ChildItem -LiteralPath $parent -Directory | Where-Object {
-        $_.Name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+function Get-JavaTool([string]$name) {
+    if ($env:JAVA_HOME) {
+        $candidate = Join-Path $env:JAVA_HOME "bin\$name.exe"
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
     }
-    if (-not $directories) {
-        throw "필요한 Android SDK 디렉터리가 없습니다: $parent\\$prefix*"
-    }
-    return $directories | Sort-Object {
-        $versionText = $_.Name.Substring($prefix.Length)
-        try { [version]$versionText } catch { [version]'0.0' }
-    } -Descending | Select-Object -First 1
+    return (Get-Command "$name.exe" -ErrorAction Stop).Source
 }
 
 $androidSdk = Find-AndroidSdk
-$platform = Get-VersionedDirectory (Join-Path $androidSdk 'platforms') 'android-'
-$buildTools = Get-VersionedDirectory (Join-Path $androidSdk 'build-tools') ''
-$androidJar = Join-Path $platform.FullName 'android.jar'
-$d8 = Join-Path $buildTools.FullName 'd8.bat'
-$javac = (Get-Command javac.exe -ErrorAction Stop).Source
-$jar = (Get-Command jar.exe -ErrorAction Stop).Source
+$platform = Join-Path $androidSdk 'platforms\android-36'
+$buildTools = Join-Path $androidSdk 'build-tools\36.1.0'
+$androidJar = Join-Path $platform 'android.jar'
+$d8 = Join-Path $buildTools 'd8.bat'
+$javac = Get-JavaTool 'javac'
+$jar = Get-JavaTool 'jar'
 
 if (-not (Test-Path -LiteralPath $androidJar)) {
     throw "android.jar가 없습니다: $androidJar"
@@ -69,7 +66,9 @@ if (Test-Path -LiteralPath $tempRoot) {
 
 New-Item -ItemType Directory -Force $classesDir, $dexDir, $outputDir | Out-Null
 
-Write-Host "[1/4] javac: $javac"
+Write-Host '[1/4] Java 소스 컴파일'
+Write-Verbose "javac: $javac"
+Write-Verbose "Android SDK: $androidSdk"
 & $javac `
     -encoding UTF-8 `
     -Xlint:-options `
@@ -106,5 +105,6 @@ if (Test-Path -LiteralPath $outputJar) {
 if ($LASTEXITCODE -ne 0) { throw "최종 JAR 생성 실패: $LASTEXITCODE" }
 
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $outputJar
-Write-Host "완료: $outputJar"
+Write-Host '완료: out\adb-intent-capture.jar'
+Write-Verbose "절대 경로: $outputJar"
 Write-Host "SHA-256: $($hash.Hash)"
