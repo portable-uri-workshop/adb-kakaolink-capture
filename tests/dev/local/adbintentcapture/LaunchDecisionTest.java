@@ -14,8 +14,11 @@ public final class LaunchDecisionTest {
                 "kakaolink", "send", "example.target", "example.target"));
         assertFalse("missing values", LaunchDecision.isKakaoTalkSend(
                 null, null, null, null));
-        assertTrue("default observation allows", LaunchDecision.shouldAllowMatchedStart(false));
-        assertFalse("opt-in blocking rejects", LaunchDecision.shouldAllowMatchedStart(true));
+        assertTrue("default observation allows", LaunchDecision.shouldAllowMatchedStart(false, true));
+        assertFalse("opt-in blocking rejects queued capture",
+                LaunchDecision.shouldAllowMatchedStart(true, true));
+        assertTrue("queue pressure fails open",
+                LaunchDecision.shouldAllowMatchedStart(true, false));
         System.out.println("LaunchDecisionTest passed");
     }
 

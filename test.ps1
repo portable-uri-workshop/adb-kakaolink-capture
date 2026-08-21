@@ -34,3 +34,9 @@ if ($LASTEXITCODE -ne 0) { throw "테스트 javac 실패: $LASTEXITCODE" }
 
 & $java -cp $testClasses 'dev.local.adbintentcapture.LaunchDecisionTest'
 if ($LASTEXITCODE -ne 0) { throw "LaunchDecisionTest 실패: $LASTEXITCODE" }
+
+& (Join-Path $projectRoot 'tests\powershell\CaptureSupport.Tests.ps1')
+if ($LASTEXITCODE -ne 0) { throw "CaptureSupport 테스트 실패: $LASTEXITCODE" }
+
+& (Join-Path $projectRoot 'tests\powershell\ParseScripts.ps1')
+if ($LASTEXITCODE -ne 0) { throw "PowerShell parse 테스트 실패: $LASTEXITCODE" }
