@@ -206,6 +206,9 @@ try {
 
     try {
         & $adb @adbSelector shell rm -f $remoteJar 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning '원격 임시 JAR 삭제에 실패했습니다.'
+        }
     } catch {
         Write-Warning '원격 임시 JAR 삭제에 실패했습니다.'
     }

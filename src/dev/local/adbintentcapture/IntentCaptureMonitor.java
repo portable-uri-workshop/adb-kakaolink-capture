@@ -10,6 +10,7 @@ import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Shell-side, no-root ActivityController that reports KakaoLink data URIs.
@@ -39,7 +40,7 @@ public final class IntentCaptureMonitor extends IActivityController.Stub {
 
         try {
             writerThread = new Thread(new CaptureWriter(), "kakaolink-capture-writer");
-            writerThread.setDaemon(false);
+            writerThread.setDaemon(true);
             writerThread.start();
 
             activityManager = getActivityManagerService();
@@ -182,7 +183,9 @@ public final class IntentCaptureMonitor extends IActivityController.Stub {
             return;
         }
         try {
-            CAPTURES.put(STOP_RECORD);
+            if (!CAPTURES.offer(STOP_RECORD, 1, TimeUnit.SECONDS)) {
+                writerThread.interrupt();
+            }
             writerThread.join(3000);
             if (writerThread.isAlive()) {
                 writerThread.interrupt();
